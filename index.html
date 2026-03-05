@@ -184,7 +184,6 @@ float triNoise2d(in vec2 p, float spd)
 }
 
 float hash21(in vec2 n){ return fract(sin(dot(n, vec2(12.9898, 4.1414))) * 43758.5453); }
-float hash11(float n){ return fract(sin(n)*43758.5453); }
 
 vec4 aurora(vec3 ro, vec3 rd)
 {
@@ -246,162 +245,17 @@ vec3 bg(in vec3 rd)
     return col*.63;
 }
 
-// ============ Landscape ============
-
-// Simple 1D noise
-float noise1d(float x) {
-    float i = floor(x);
-    float f = fract(x);
-    f = f*f*(3.0-2.0*f);
-    return mix(hash11(i), hash11(i+1.0), f);
-}
-
-// Mountain silhouette - distant jagged mountains
-float mountains(float x) {
-    float h = 0.0;
-    h += sin(x*0.3)*0.12 + sin(x*0.7+2.0)*0.08 + sin(x*1.5+5.0)*0.04;
-    h += noise1d(x*2.0)*0.06 + noise1d(x*4.0)*0.03 + noise1d(x*8.0)*0.015;
-    // Add some sharp peaks
-    float peak1 = max(0.0, 0.08 - abs(x - 0.1)*0.5);
-    float peak2 = max(0.0, 0.12 - abs(x + 0.3)*0.4);
-    float peak3 = max(0.0, 0.06 - abs(x - 0.5)*0.6);
-    h += peak1 + peak2 + peak3;
-    return h + 0.08;
-}
-
-// Pine tree shape - tall triangular
-float pineTree(vec2 uv, vec2 pos, float height, float width) {
-    vec2 p = uv - pos;
-    // Trunk
-    float trunk = step(abs(p.x), width*0.06) * step(0.0, p.y) * step(p.y, height*0.15);
-    // Canopy - stacked triangles
-    float canopy = 0.0;
-    for (float i = 0.0; i < 3.0; i++) {
-        float layerH = height * (0.15 + i*0.28);
-        float layerTop = height * (0.45 + i*0.25);
-        float layerW = width * (1.0 - i*0.15);
-        float y = p.y - layerH;
-        float h = layerTop - layerH;
-        if (y > 0.0 && y < h) {
-            float w = layerW * (1.0 - y/h);
-            canopy += step(abs(p.x), w);
-        }
-    }
-    return max(trunk, canopy);
-}
-
-// Broad/deciduous tree - round canopy
-float broadTree(vec2 uv, vec2 pos, float height, float radius) {
-    vec2 p = uv - pos;
-    // Trunk
-    float trunk = step(abs(p.x), radius*0.12) * step(0.0, p.y) * step(p.y, height*0.5);
-    // Canopy - elliptical with some irregularity
-    vec2 cp = p - vec2(0.0, height*0.55);
-    float rx = radius;
-    float ry = radius * 0.85;
-    // Add some bumpiness
-    float angle = atan(cp.y, cp.x);
-    float bump = 1.0 + 0.15*sin(angle*5.0+pos.x*30.0) + 0.1*sin(angle*8.0-pos.x*20.0) + 0.08*sin(angle*13.0);
-    float d = length(cp / vec2(rx, ry)) / bump;
-    float canopy = 1.0 - smoothstep(0.85, 1.0, d);
-    // Small sub-canopy clusters
-    vec2 cp2 = p - vec2(-radius*0.4, height*0.4);
-    float d2 = length(cp2 / vec2(radius*0.5, radius*0.45));
-    float bump2 = 1.0 + 0.12*sin(atan(cp2.y,cp2.x)*6.0+pos.x*25.0);
-    canopy = max(canopy, 1.0 - smoothstep(0.85, 1.0, d2/bump2));
-    vec2 cp3 = p - vec2(radius*0.35, height*0.42);
-    float d3 = length(cp3 / vec2(radius*0.45, radius*0.4));
-    float bump3 = 1.0 + 0.1*sin(atan(cp3.y,cp3.x)*7.0-pos.x*15.0);
-    canopy = max(canopy, 1.0 - smoothstep(0.85, 1.0, d3/bump3));
-    return max(trunk, canopy);
-}
-
-// Tent / teepee shape
-float tent(vec2 uv, vec2 pos, float height, float width) {
-    vec2 p = uv - pos;
-    if (p.y < 0.0 || p.y > height) return 0.0;
-    float t = p.y / height;
-    float w = width * (1.0 - t*0.92);
-    float shape = step(abs(p.x), w);
-    // Door opening
-    float door = step(abs(p.x), width*0.15) * step(0.0, p.y) * step(p.y, height*0.35);
-    // Pole sticking out top
-    float pole = step(abs(p.x - width*0.02), 0.002) * step(height*0.85, p.y) * step(p.y, height*1.15);
-    float pole2 = step(abs(p.x + width*0.02), 0.002) * step(height*0.85, p.y) * step(p.y, height*1.12);
-    return max(shape - door * 0.0, max(shape, max(pole, pole2)));
-}
-
-// Full landscape mask: returns 1.0 for silhouette, 0.0 for sky
-float landscape(vec2 uv, float aspect) {
-    float mask = 0.0;
-
-    // Ground plane
-    mask = max(mask, step(uv.y, 0.0));
-
-    // Distant mountains
-    float mt = mountains(uv.x * 3.0) * 0.55;
-    mask = max(mask, 1.0 - smoothstep(mt - 0.003, mt, uv.y));
-
-    // Hills / rolling ground
-    float ground = 0.0;
-    ground += sin(uv.x*2.5+1.0)*0.02 + sin(uv.x*5.0+3.0)*0.01;
-    ground += noise1d(uv.x*6.0)*0.015;
-    mask = max(mask, 1.0 - smoothstep(ground-0.002, ground, uv.y));
-
-    // --- Far trees (smaller, in the mid-ground along the mountain base) ---
-    for (float i = 0.0; i < 20.0; i++) {
-        float xp = -aspect*0.9 + i * aspect * 2.0 / 20.0 + hash11(i*7.3)*0.08;
-        float h = 0.06 + hash11(i*3.7)*0.06;
-        float w = 0.012 + hash11(i*5.1)*0.008;
-        float groundH = sin(xp*2.5+1.0)*0.02 + sin(xp*5.0+3.0)*0.01 + noise1d(xp*6.0)*0.015;
-        mask = max(mask, pineTree(uv, vec2(xp, groundH), h, w));
-    }
-
-    // --- Left foreground large broad trees ---
-    mask = max(mask, broadTree(uv, vec2(-aspect*0.82, -0.02), 0.38, 0.14));
-    mask = max(mask, broadTree(uv, vec2(-aspect*0.65, -0.01), 0.32, 0.11));
-    mask = max(mask, pineTree(uv, vec2(-aspect*0.55, -0.01), 0.28, 0.04));
-
-    // --- Right foreground trees ---
-    mask = max(mask, broadTree(uv, vec2(aspect*0.85, -0.02), 0.35, 0.13));
-    mask = max(mask, pineTree(uv, vec2(aspect*0.7, -0.01), 0.30, 0.045));
-    mask = max(mask, broadTree(uv, vec2(aspect*0.6, -0.015), 0.25, 0.09));
-    mask = max(mask, pineTree(uv, vec2(aspect*0.52, -0.01), 0.22, 0.035));
-
-    // --- Mid-ground pine tree clusters ---
-    for (float i = 0.0; i < 12.0; i++) {
-        float xp = -aspect*0.45 + i * aspect * 0.9 / 12.0 + hash11(i*11.3)*0.06;
-        float h = 0.08 + hash11(i*2.3)*0.10;
-        float w = 0.015 + hash11(i*4.7)*0.012;
-        float groundH = sin(xp*2.5+1.0)*0.02 + sin(xp*5.0+3.0)*0.01;
-        mask = max(mask, pineTree(uv, vec2(xp, groundH - 0.005), h, w));
-    }
-
-    // --- Tent (right of center) ---
-    float tentGround = sin(0.15*2.5+1.0)*0.02 + sin(0.15*5.0+3.0)*0.01;
-    mask = max(mask, tent(uv, vec2(0.15, tentGround - 0.005), 0.10, 0.05));
-
-    return clamp(mask, 0.0, 1.0);
-}
-
-// ============ End Landscape ============
-
 void mainImage( out vec4 fragColor, in vec2 fragCoord )
 {
     vec2 q = fragCoord.xy / iResolution.xy;
     vec2 p = q - 0.5;
-    float aspect = iResolution.x/iResolution.y;
-    p.x *= aspect;
-
-    // Shift view so horizon is at lower portion of screen
-    vec2 uv = p;
-    uv.y -= 0.05;
+    p.x*=iResolution.x/iResolution.y;
 
     vec3 ro = vec3(0,0,-6.7);
     vec3 rd = normalize(vec3(p,1.3));
     vec2 mo = iMouse.xy / iResolution.xy-.5;
     mo = (mo==vec2(-.5))?vec2(-0.1,0.1):mo;
-    mo.x *= aspect;
+    mo.x *= iResolution.x/iResolution.y;
     rd.yz *= mm2(mo.y);
     rd.xz *= mm2(mo.x + sin(iTime*0.05)*0.2);
 
@@ -411,44 +265,22 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
 
     col = bg(rd)*fade;
 
-    // Always render sky + aurora + stars (looking up)
     if (rd.y > 0.){
         vec4 aur = smoothstep(0.,1.5,aurora(ro,rd))*fade;
         col += stars(rd);
         col = col*(1.-aur.a) + aur.rgb;
-    } else {
-        // Below horizon: dim sky with faint aurora reflection
-        rd.y = abs(rd.y);
-        col = bg(rd)*fade*0.4;
-        vec4 aur = smoothstep(0.0,3.5,aurora(ro,rd))*0.3;
-        col = col*(1.-aur.a) + aur.rgb;
     }
-
-    // Atmospheric glow near horizon (green tint from aurora)
-    float horizonGlow = exp(-abs(uv.y - 0.0)*8.0) * 0.15;
-    col += mix(uColor1, uColor2, 0.3) * horizonGlow * uIntensity * 0.3;
-
-    // Landscape silhouette
-    float silhouette = landscape(uv, aspect);
-
-    // Silhouette color: very dark with faint ambient from aurora
-    vec3 silhouetteColor = vec3(0.008, 0.012, 0.01);
-    // Faint edge glow from aurora light on tree tops
-    float edgeGlow = 0.0;
-    float eps = 0.003;
-    float maskUp = landscape(uv + vec2(0.0, eps), aspect);
-    float maskRight = landscape(uv + vec2(eps, 0.0), aspect);
-    edgeGlow = max(0.0, silhouette - maskUp) + max(0.0, silhouette - maskRight);
-    edgeGlow = smoothstep(0.0, 0.5, edgeGlow);
-    vec3 glowColor = mix(uColor1, vec3(0.2, 0.35, 0.2), 0.5) * 0.4;
-    silhouetteColor += glowColor * edgeGlow;
-
-    // Fog / atmosphere for distant elements
-    float fogFactor = smoothstep(0.05, 0.3, uv.y) * 0.3;
-    vec3 fogColor = mix(vec3(0.02, 0.04, 0.03), mix(uColor1, uColor2, 0.3)*0.08, fogFactor);
-    silhouetteColor += fogColor * silhouette;
-
-    col = mix(col, silhouetteColor, silhouette);
+    else
+    {
+        rd.y = abs(rd.y);
+        col = bg(rd)*fade*0.6;
+        vec4 aur = smoothstep(0.0,2.5,aurora(ro,rd));
+        col += stars(rd)*0.1;
+        col = col*(1.-aur.a) + aur.rgb;
+        vec3 pos = ro + ((0.5-ro.y)/rd.y)*rd;
+        float nz2 = triNoise2d(pos.xz*vec2(.5,.7), 0.);
+        col += mix(vec3(0.2,0.25,0.5)*0.08,vec3(0.3,0.3,0.5)*0.7, nz2*0.4);
+    }
 
     fragColor = vec4(col, 1.);
 }
