@@ -245,6 +245,36 @@ vec3 bg(in vec3 rd)
     return col*.63;
 }
 
+// --- Water ---
+float hashV(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f*f*(3.0-2.0*f);
+    return mix(mix(hashV(i), hashV(i+vec2(1.0,0.0)), f.x),
+               mix(hashV(i+vec2(0.0,1.0)), hashV(i+vec2(1.0,1.0)), f.x), f.y);
+}
+
+const mat2 mw = mat2(0.6, -0.8, 0.8, 0.6);
+
+float waterFbm(vec2 p) {
+    float f = 0.0;
+    float t = time * 0.4;
+    f += 0.5000 * vnoise(p + vec2( t*0.3, -t*0.2)); p = mw * p * 2.02;
+    f += 0.2500 * vnoise(p - vec2( t*0.2,  t*0.15)); p = mw * p * 2.03;
+    f += 0.1250 * vnoise(p + vec2(-t*0.15, t*0.1)); p = mw * p * 2.01;
+    f += 0.0625 * vnoise(p + vec2( t*0.1, -t*0.08));
+    return f / 0.9375;
+}
+
+float waterMap(vec2 pos) {
+    vec2 posm = pos * mw;
+    return abs(waterFbm(8.0 * posm) - 0.5) * 0.25;
+}
+
 void mainImage( out vec4 fragColor, in vec2 fragCoord )
 {
     vec2 q = fragCoord.xy / iResolution.xy;
@@ -272,14 +302,31 @@ void mainImage( out vec4 fragColor, in vec2 fragCoord )
     }
     else
     {
+        // Water: mirror reflection + bump ripple distortion
+        float dist = ((-0.3) - ro.y) / rd.y;
+        vec3 waterPos = ro + dist * rd;
+        vec2 coord = waterPos.xz * 0.15;
+
+        // Bump normal perturbation
+        float bumpFactor = 0.4 * (1.0 - smoothstep(0.0, 80.0, dist));
+        float eps = 0.1;
+        float dx = (waterMap(coord + vec2(eps, 0.0)) - waterMap(coord - vec2(eps, 0.0))) / (2.0 * eps);
+        float dz = (waterMap(coord + vec2(0.0, eps)) - waterMap(coord - vec2(0.0, eps))) / (2.0 * eps);
+
+        // Flip ray upward (mirror) then perturb with bump
         rd.y = abs(rd.y);
-        col = bg(rd)*fade*0.6;
-        vec4 aur = smoothstep(0.0,2.5,aurora(ro,rd));
-        col += stars(rd)*0.1;
-        col = col*(1.-aur.a) + aur.rgb;
-        vec3 pos = ro + ((0.5-ro.y)/rd.y)*rd;
-        float nz2 = triNoise2d(pos.xz*vec2(.5,.7), 0.);
-        col += mix(vec3(0.2,0.25,0.5)*0.08,vec3(0.3,0.3,0.5)*0.7, nz2*0.4);
+        rd.x -= dx * bumpFactor;
+        rd.z -= dz * bumpFactor;
+        rd = normalize(rd);
+
+        // How far below horizon (0 at horizon, 1 at straight down)
+        float depth = clamp(-brd.y * 6.0, 0.0, 1.0);
+
+        // Reflected sky + aurora (match sky branch at horizon, darken with depth)
+        col = bg(rd) * fade * mix(1.0, 0.6, depth);
+        vec4 aur = smoothstep(0.0, mix(1.5, 2.5, depth), aurora(ro, rd)) * fade;
+        col += stars(rd) * mix(1.0, 0.1, depth);
+        col = col * (1.0 - aur.a) + aur.rgb;
     }
 
     fragColor = vec4(col, 1.);
